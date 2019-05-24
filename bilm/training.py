@@ -55,6 +55,9 @@ class LanguageModel(object):
         'projection_dim' is assumed token embedding size and LSTM output size.
         'dim' is the hidden state size.
         Set 'dim' == 'projection_dim' to skip a projection layer.
+
+    You may specify override_bidirectional_value to force a certain value of
+    "bidirectional", regardless of what is specified in "options.json"
     '''
 
     def __init__(self, options, is_training):
@@ -528,6 +531,7 @@ class LanguageModel(object):
             token_losses.append(losses)
             self.individual_losses.append(tf.reduce_mean(losses))
 
+        self.final_forward_token_losses = token_losses[0]
         # now make the total loss -- it's the mean of the individual losses
         if self.bidirectional:
             self.total_loss = 0.5 * (self.individual_losses[0]
@@ -1054,7 +1058,8 @@ def test(options, ckpt_file, data, batch_size=256):
 
 
 def sentence_probabilities(options, ckpt_file, sentence_file, vocab_file, batch_size=256,
-                           burn_in_text=None):
+                           burn_in_text=None, *,
+                           bidirectional_losses=True):
     """
     Gets the probabilities of each sentence in a file of sentence_lines.
 
@@ -1069,6 +1074,17 @@ def sentence_probabilities(options, ckpt_file, sentence_file, vocab_file, batch_
     not specified, then the "zero state" is used to initialize the LSTM for all inference batches.
     """
     bidirectional = options.get('bidirectional', False)
+
+    if bidirectional:
+        print("Running in bidirectional mode")
+    else:
+        print("Running in non-bidirectional mode")
+
+    if bidirectional_losses:
+        print("Using bidirectional losses")
+    else:
+        print("Using forward losses")
+
     char_inputs = 'char_cnn' in options
     if char_inputs:
         max_chars = options['char_cnn']['max_characters_per_token']
@@ -1081,7 +1097,6 @@ def sentence_probabilities(options, ckpt_file, sentence_file, vocab_file, batch_
         sentence_lines = list(chunked(sentences_in, batch_size))
 
     if burn_in_text:
-        burn_in_batches = []
         # the LSTM language model can be unreliable at first, so if requested we run the given
         # text through it and use the resulting LSTM state as the initial state for inference
         # on our real batches
@@ -1214,8 +1229,13 @@ def sentence_probabilities(options, ckpt_file, sentence_file, vocab_file, batch_
                 feed_dict[model.next_token_id_reverse] = np.expand_dims(
                     reversed_token_batch[:, word_idx + 1], axis=1)
 
+                if bidirectional_losses:
+                    loss_variable = model.final_token_losses
+                else:
+                    loss_variable = model.final_forward_token_losses
+
                 ret = sess.run(
-                    [model.final_token_losses, final_state_tensors],
+                    [loss_variable, final_state_tensors],
                     feed_dict=feed_dict
                 )
 
